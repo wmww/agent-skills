@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "wmww-agent-skills",
+  "description": "Tess's personal skills for coding agents",
+  "owner": {
+    "name": "wmww"
+  },
+  "plugins": [
+    {
+      "name": "gui-testing",
+      "description": "Run a Linux GUI program in a disposable headless Wayland session, take screenshots and inject mouse/keyboard events. Use to test rendering/interaction/etc of a Wayland/X11 app.",
+      "source": "./gui-testing",
+      "category": "testing",
+      "homepage": "https://github.com/wmww/agent-skills/tree/main/gui-testing"
+    }
+  ]
+}

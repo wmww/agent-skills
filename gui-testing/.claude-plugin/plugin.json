@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "gui-testing",
+  "description": "Run a Linux GUI program in a disposable headless Wayland session, take screenshots and inject mouse/keyboard events. Use to test rendering/interaction/etc of a Wayland/X11 app.",
+  "version": "0.1.0",
+  "author": {
+    "name": "wmww"
+  },
+  "homepage": "https://github.com/wmww/agent-skills/tree/main/gui-testing"
+}
