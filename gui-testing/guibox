@@ -1,0 +1,127 @@
+#!/bin/sh
+# guibox - short-lived headless Wayland session for GUI testing
+set -eu
+
+self=$(cd "$(dirname "$0")" && pwd)/${0##*/}
+
+usage() {
+	cat <<'EOF'
+usage: guibox start [-s WxH] [-t SECS] [-x] [-- CMD...]  start session, print its dir
+       guibox stop DIR                                   kill session + delete dir
+       guibox list                                       list live session dirs
+  -s  output size (default 1280x720)
+  -t  self-destruct after N seconds (default 600)
+  -x  enable Xwayland
+EOF
+	exit 1
+}
+
+waitfor() { # waitfor SHELL-TEST TIMEOUT-SECONDS
+	n=$(($2 * 10))
+	while ! eval "$1" >/dev/null 2>&1; do
+		n=$((n - 1))
+		[ "$n" -le 0 ] && return 1
+		sleep 0.1
+	done
+}
+
+# Signal ($2) every process tagged as part of session $1. GUIBOX is exported
+# into the compositor only, so it is inherited by everything the compositor
+# spawns but never by a shell that merely sourced $DIR/env.
+reap() {
+	for e in /proc/[0-9]*/environ; do
+		p=${e#/proc/}
+		grep -qz "^GUIBOX=$1\$" "$e" 2>/dev/null && kill "$2" "${p%/environ}" 2>/dev/null
+	done
+	return 0
+}
+
+cmd_start() {
+	size=1280x720 ttl=600 xwl=disable
+	while getopts s:t:x o; do
+		case $o in
+		s) size=$OPTARG ;;
+		t) ttl=$OPTARG ;;
+		x) xwl=enable ;;
+		*) usage ;;
+		esac
+	done
+	shift $((OPTIND - 1))
+
+	for c in sway grim wdotool; do
+		command -v $c >/dev/null ||
+			{ echo "guibox: '$c' is not installed - ask the user to install it" >&2; exit 1; }
+	done
+
+	# Sweep dirs left behind by a session that died without cleaning up.
+	for d in $(find /tmp -maxdepth 1 -name 'guibox.*' -mmin +1 2>/dev/null); do
+		grep -lz "^GUIBOX=$d\$" /proc/[0-9]*/environ >/dev/null 2>&1 || rm -rf "$d"
+	done
+
+	dir=$(mktemp -d /tmp/guibox.XXXXXX)
+	chmod 700 "$dir"
+
+	if [ $# -gt 0 ]; then
+		for a; do
+			printf "'%s' " "$(printf %s "$a" | sed "s/'/'\\\\''/g")" >>"$dir/app.sh"
+		done
+		echo "
+echo \$? >$dir/app.rc" >>"$dir/app.sh"
+	fi
+
+	{
+		echo "output HEADLESS-1 mode $size bg #000000 solid_color"
+		echo "default_border none"
+		echo "xwayland $xwl"
+		# RUST_LOG=warn quiets wdotool's per-call INFO line on stderr without
+		# hiding its warnings or errors.
+		printf 'exec printf "export XDG_RUNTIME_DIR=%%s\\nexport WAYLAND_DISPLAY=%%s\\nexport SWAYSOCK=%%s\\nexport DISPLAY=%%s\\nexport RUST_LOG=warn\\n" "$XDG_RUNTIME_DIR" "$WAYLAND_DISPLAY" "$SWAYSOCK" "$DISPLAY" >%s/env\n' "$dir"
+		# A headless seat has no input devices, so it advertises no pointer or
+		# keyboard capability. Holding virtual devices open for the session gives
+		# it both, and keeps hover state alive between commands.
+		echo "exec wdotool prime >$dir/prime 2>&1"
+		[ -f "$dir/app.sh" ] && echo "exec sh $dir/app.sh"
+	} >"$dir/config"
+
+	env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+		setsid sh -c "GUIBOX=$dir XDG_RUNTIME_DIR=$dir WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
+			timeout --foreground -s TERM $ttl sway -c $dir/config; $self stop $dir" \
+		>"$dir/log" 2>&1 &
+
+	waitfor "[ -s $dir/env ]" 10 || {
+		echo "guibox: compositor did not start, log follows:" >&2
+		sed 's/^/  /' "$dir/log" >&2
+		rm -rf "$dir"
+		exit 1
+	}
+	waitfor "grep -q ready $dir/prime" 5 ||
+		echo "guibox: virtual input devices not ready; see $dir/prime" >&2
+	if [ -f "$dir/app.sh" ]; then
+		# shellcheck disable=SC1090
+		. "$dir/env"
+		waitfor "swaymsg -t get_tree | grep -q '\"pid\":' || [ -f $dir/app.rc ]" 20
+		swaymsg -t get_tree | grep -q '"pid":' || {
+			echo "guibox: no window appeared; last lines of $dir/log:" >&2
+			tail -5 "$dir/log" | sed 's/^/  /' >&2
+		}
+		# Wayland windows only map once painted; X11 ones map before that.
+		[ "$xwl" = enable ] && sleep 1
+	fi
+	echo "$dir"
+}
+
+case ${1-} in
+start)
+	shift
+	cmd_start "$@"
+	;;
+stop)
+	case ${2-} in /tmp/guibox.*) ;; *) usage ;; esac
+	reap "$2" -TERM
+	sleep 0.5
+	reap "$2" -KILL
+	rm -rf "$2"
+	;;
+list) ls -d /tmp/guibox.* 2>/dev/null || true ;;
+*) usage ;;
+esac
