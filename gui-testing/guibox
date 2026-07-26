@@ -25,13 +25,13 @@ waitfor() { # waitfor SHELL-TEST TIMEOUT-SECONDS
 	done
 }
 
-# Signal ($2) every process tagged as part of session $1. GUIBOX is exported
-# into the compositor only, so it is inherited by everything the compositor
-# spawns but never by a shell that merely sourced $DIR/env.
+# Signal ($2) every process tagged as part of session $1. GUIBOX_SESSION is
+# exported into the compositor only, so it is inherited by everything the
+# compositor spawns but never by a shell that merely sourced $DIR/env.
 reap() {
 	for e in /proc/[0-9]*/environ; do
 		p=${e#/proc/}
-		grep -qz "^GUIBOX=$1\$" "$e" 2>/dev/null && kill "$2" "${p%/environ}" 2>/dev/null
+		grep -qz "^GUIBOX_SESSION=$1\$" "$e" 2>/dev/null && kill "$2" "${p%/environ}" 2>/dev/null
 	done
 	return 0
 }
@@ -55,7 +55,7 @@ cmd_start() {
 
 	# Sweep dirs left behind by a session that died without cleaning up.
 	for d in $(find /tmp -maxdepth 1 -name 'guibox.*' -mmin +1 2>/dev/null); do
-		grep -lz "^GUIBOX=$d\$" /proc/[0-9]*/environ >/dev/null 2>&1 || rm -rf "$d"
+		grep -lz "^GUIBOX_SESSION=$d\$" /proc/[0-9]*/environ >/dev/null 2>&1 || rm -rf "$d"
 	done
 
 	dir=$(mktemp -d /tmp/guibox.XXXXXX)
@@ -84,7 +84,7 @@ echo \$? >$dir/app.rc" >>"$dir/app.sh"
 	} >"$dir/config"
 
 	env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
-		setsid sh -c "GUIBOX=$dir XDG_RUNTIME_DIR=$dir WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
+		setsid sh -c "GUIBOX_SESSION=$dir XDG_RUNTIME_DIR=$dir WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
 			timeout --foreground -s TERM $ttl sway -c $dir/config; $self stop $dir" \
 		>"$dir/log" 2>&1 &
 
@@ -94,6 +94,9 @@ echo \$? >$dir/app.rc" >>"$dir/app.sh"
 		rm -rf "$dir"
 		exit 1
 	}
+	# $GUIBOX in the session env lets later shells re-run this script without
+	# knowing where it lives.
+	echo "export GUIBOX=$self" >>"$dir/env"
 	waitfor "grep -q ready $dir/prime" 5 ||
 		echo "guibox: virtual input devices not ready; see $dir/prime" >&2
 	if [ -f "$dir/app.sh" ]; then

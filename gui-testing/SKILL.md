@@ -15,17 +15,19 @@ If a tool is missing, **ask the user to install it** and wait - don't run the in
 
 ## Use
 
+`guibox` sits next to this file. Call it by absolute path - the working directory is the user's project, not this skill. Some installers copy it without the executable bit; `chmod +x` it once if it won't run.
+
 ```sh
-DIR=$(gui-testing/guibox start -- myapp --flag)   # returns once the app's window is up
-. $DIR/env                                        # session env; needed in every later shell
+DIR=$(/abs/path/to/gui-testing/guibox start -- myapp --flag)  # returns once the app's window is up
+. $DIR/env                                        # session env + $GUIBOX; needed in every later shell
 grim $DIR/1.png                                   # screenshot the output, then read it
 wdotool mousemove 200 249 click 1                 # act on it, perhaps screenshot again
-gui-testing/guibox stop $DIR                      # kill the app, delete the dir
+$GUIBOX stop $DIR                                 # kill the app, delete the dir
 ```
 
 `start` options: `-s WxH` output size (default 1280x720), `-t SECS` TTL (default 600), `-x` enable Xwayland. Everything else is plain `grim`/`wdotool`/`swaymsg`.
 
-Without `. $DIR/env` those tools talk to the user's real desktop instead. Keep screenshots in `$DIR` so they vanish with the session; copy out anything you need to persist.
+Without `. $DIR/env` those tools talk to the user's real desktop instead. Sourcing it also sets `$GUIBOX` to this script, so only the first call needs the long path. Keep screenshots in `$DIR` so they vanish with the session; copy out anything you need to persist.
 
 ## Interacting
 
@@ -70,4 +72,4 @@ Launch extra programs with `swaymsg exec` rather than backgrounding them from yo
 - In some cases it may be helpful to give apps a disposable profile so they don't collide with other instances (e.g. `firefox --profile /tmp/ff --no-remote`).
 - `-x` runs X11 clients under Xwayland. Prefer Wayland, only use X11 support with X-only apps.
 - All the same tools work on X11. `wdotool type` sends ASCII only there - non-ASCII characters are dropped, so paste those with `wl-copy 'text'` then `wdotool key ctrl+v`.
-- Cleanup is automatic: `stop`, the TTL, and a sweep of dead sessions on the next `start` all remove the processes and the directory. `guibox list` shows live sessions, which may belong to other agents - don't stop dirs you didn't start or blindly killall by name.
+- Cleanup is automatic: `stop`, the TTL, and a sweep of dead sessions on the next `start` all remove the processes and the directory. `$GUIBOX list` shows live sessions, which may belong to other agents - don't stop dirs you didn't start or blindly killall by name.
