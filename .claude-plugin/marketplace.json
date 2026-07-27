@@ -12,6 +12,13 @@
       "source": "./gui-testing",
       "category": "testing",
       "homepage": "https://github.com/wmww/agent-skills/tree/main/gui-testing"
+    },
+    {
+      "name": "timegap",
+      "description": "Timestamp a program's output and measure the gaps between lines with `tg` (timegap). Use to find which step of a slow command eats the time, spot stalls in live logs, and debug timing-dependent behaviour.",
+      "source": "./timegap",
+      "category": "debugging",
+      "homepage": "https://github.com/wmww/agent-skills/tree/main/timegap"
     }
   ]
 }
