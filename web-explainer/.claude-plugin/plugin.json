@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "web-explainer",
+  "description": "Guidance for building clear, delightful web pages, especially explainers, tutorials and documentation — compact prose, purposeful design, and plain HTML/CSS/JS. Use when writing or designing a web-based explainer or docs site.",
+  "version": "0.1.0",
+  "author": {
+    "name": "wmww"
+  },
+  "homepage": "https://github.com/wmww/agent-skills/tree/main/web-explainer"
+}

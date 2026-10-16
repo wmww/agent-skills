@@ -19,6 +19,13 @@
       "source": "./timegap",
       "category": "debugging",
       "homepage": "https://github.com/wmww/agent-skills/tree/main/timegap"
+    },
+    {
+      "name": "web-explainer",
+      "description": "Guidance for building clear, delightful web pages, especially explainers, tutorials and documentation — compact prose, purposeful design, and plain HTML/CSS/JS. Use when writing or designing a web-based explainer or docs site.",
+      "source": "./web-explainer",
+      "category": "design",
+      "homepage": "https://github.com/wmww/agent-skills/tree/main/web-explainer"
     }
   ]
 }

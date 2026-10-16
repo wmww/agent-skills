@@ -5,6 +5,8 @@ Grab bag of my personal skills for coding agents
   session and drive it with screenshots, clicks, typing and drags
 - [`timegap`](timegap/) — timestamp a program's output with
   [`tg`](https://codeberg.org/sphi/timegap) to find which step is slow or where it stalls
+- [`web-explainer`](web-explainer/) — guidance for building clear, delightful web
+  explainers, tutorials and docs
 
 ## Install
 
