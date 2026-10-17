@@ -13,13 +13,13 @@ This is guidance for building comprehensible and delightful web experiences, par
 - Keep your purpose in mind. Just because a particular topic is very important in a source doesn't mean it necessarily needs a large presence (or any at all) in what you're writing. 
 - Use sub-agents to review and edit your content, for example you might dump a bunch of details into a sub-agent and have it write a line that captures the essence, or review a draft for clarity/simplicity without the existing context you have
 - Tell your content sub-agents who they are (a non-technical manager, a web-dev without low-level experience, etc) as needed
-- Periodically take a step back, and make sure the structure and flow of your writing is still sensible. Reorganize and edit as needed
+- Periodically take a step back, and make sure the structure and flow of your writing is still sensible. Restructure and edit (both at the paragraph level and the document/project level) as needed
 - Use varied sentence length and structure throughout the project
 - Avoid stating what *isn't* true, unless a reader is genuinely likely to have a false impression for some reason
-- Always consolidate and simplify your prose if you can do so without degrading quality
-- Never write more to fill up space. If a one-word "sentence" says what you want to say, that's the right choice.
-- When editing, be mindful if you're adding or subtracting. Sometimes the right "correction" to a mistake is simply removing whatever is incorrect
-- Ultimately, you're in charge of making the content as clear, complete and easy to understand as possible. The first human to see it might themselves be the target audience
+- Always consolidate and simplify your prose if you can do so while still conveying the required information
+- Never write more to fill up space. If a one-word "sentence" says what you want to say, that's the right choice
+- When editing, be mindful if you're adding or subtracting. Often the right "correction" to a mistake is simply removing whatever is incorrect
+- Ultimately, you're in charge of making the content as clear and easy to understand as possible. The first human to see it might themselves be the target audience
 
 ## Graphic design
 - Your primary objective is to make the experience instantly and effortlessly informative to the target audience
@@ -28,6 +28,8 @@ This is guidance for building comprehensible and delightful web experiences, par
 - Avoid excessive "structure" in the page. You usually don't want many layers of visually distinct containers inside each other
 - Avoid thin box outlines and *never* pair a single-side border with rounded corners in a way that results in a crescent corner
 - Every element on the page should have a purpose, if removing any given element does not degrade the experience, do it
+- Graphics should replace text where possible, rather than just duplicating it or providing eye candy
+- Graphics should be on the frontier of visual simplicity and information density, the bast graphics precisely communicate a complex concept with a handful of elements
 - Design things adaptive to various screen sizes where practical
 - Visually inspect your graphics and layout to make sure everything looks good, don't push QA onto the user
 - Have a light/dark toggle that follows the browser theme by default
