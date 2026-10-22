@@ -3,6 +3,8 @@ Grab bag of my personal skills for coding agents
 
 - [`gui-testing`](gui-testing/) — run a GUI program in a throwaway headless Wayland
   session and drive it with screenshots, clicks, typing and drags
+- [`reasonable-rust-builds`](reasonable-rust-builds/) — keep cargo target dirs from eating
+  tens of GBs: debuginfo, test layout, worktree seeding, sweeping stale artifacts
 - [`timegap`](timegap/) — timestamp a program's output with
   [`tg`](https://codeberg.org/sphi/timegap) to find which step is slow or where it stalls
 - [`web-explainer`](web-explainer/) — guidance for building clear, delightful web

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "reasonable-rust-builds",
+  "description": "Keep Rust/cargo target dirs from eating tens of GBs (per worktree, per test binary, stale artifact pileup) without slowing builds. Use when starting a Rust project, reorganizing a Rust repo's build/test/worktree workflow, or when target/ disk use is a problem.",
+  "version": "0.1.0",
+  "author": {
+    "name": "wmww"
+  },
+  "homepage": "https://github.com/wmww/agent-skills/tree/main/reasonable-rust-builds"
+}

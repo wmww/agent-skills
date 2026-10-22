@@ -14,6 +14,13 @@
       "homepage": "https://github.com/wmww/agent-skills/tree/main/gui-testing"
     },
     {
+      "name": "reasonable-rust-builds",
+      "description": "Keep Rust/cargo target dirs from eating tens of GBs (per worktree, per test binary, stale artifact pileup) without slowing builds. Use when starting a Rust project, reorganizing a Rust repo's build/test/worktree workflow, or when target/ disk use is a problem.",
+      "source": "./reasonable-rust-builds",
+      "category": "development",
+      "homepage": "https://github.com/wmww/agent-skills/tree/main/reasonable-rust-builds"
+    },
+    {
       "name": "timegap",
       "description": "Timestamp a program's output and measure the gaps between lines with `tg` (timegap). Use to find which step of a slow command eats the time, spot stalls in live logs, and debug timing-dependent behaviour.",
       "source": "./timegap",
