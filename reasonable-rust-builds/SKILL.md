@@ -13,6 +13,7 @@ Disk use is a product: **linked binaries × debuginfo × artifact "universes" ×
 
 ```sh
 du -sh target/*/ target/*/{deps,build,incremental}      # where in target/
+du -sh main/target wt/target                            # one call counts hardlinks once: wt's unique bytes
 ls target/debug/deps | grep -v '\.' | wc -l             # linked executables (Unix)
 du -ah target/debug/deps | sort -h | tail               # biggest artifacts
 find ~ -name CACHEDIR.TAG -path '*target*' -exec dirname {} \; | xargs du -sh  # every target dir on the box
@@ -33,7 +34,7 @@ Every linked executable embeds the whole static dep tree, so count binaries, not
 
 - **Each `tests/*.rs` file is its own binary.** Use one integration-test binary per crate: `tests/suite/main.rs` declaring `mod foo; mod bar;` (files in `tests/suite/`). Shared helpers become a module. Filter with `cargo test --test suite foo::`. Watch for tests that relied on process isolation (global state, one-per-process inits); share those via a `OnceLock`.
 - Prefer unit tests (`#[cfg(test)] mod tests` in `src/`): they land in the lib's single test binary.
-- `test = false` on `[[bin]]`s and `[lib]`s that have no unit tests, `doctest = false` on libs with no doctests (edition 2024 merges doctests into one binary; older editions link one *per doctest*).
+- `test = false` on `[[bin]]`s and `[lib]`s that have no unit tests, `doctest = false` on libs with no doctests (edition 2024 merges doctests into one binary; older editions link one *per doctest*: slow, though in a temp dir, not `target/`).
 - `cargo test` also builds every example. Keep examples few or make them tests.
 - One workspace with one `Cargo.lock` and one `target/`, never sibling standalone crates each with their own.
 
@@ -52,7 +53,8 @@ Only when many binaries (tests, tools, the app) each embed a large stack (≳100
 Every distinct combination of features/flags/env compiles a *new copy* of the affected crates and everything above them, kept forever (one agent session minted ~7 copies, 10 GB, in an afternoon). Causes:
 
 - `-p` subsets: features unify over the selected packages only. Stick to `--workspace` and narrow with test filters / `--test <name>`. (`resolver.feature-unification = "workspace"` fixes this but is nightly-only as of cargo 1.98; use it once stable.)
-- dev-dependencies that enable extra features on a normal dependency split `cargo build` from `cargo test`. Enable those features in `[dependencies]` too.
+- Different features per command (`cargo clippy --all-features` beside plain `cargo test`, `--features a` then `--features a,b`). Pick one dev feature set and pass it to build, test and clippy alike.
+- dev-dependencies that enable extra features on a normal dependency split `cargo build` from `cargo test`. Enable those features in `[dependencies]` too. A crate's dev-dependency on *itself* with a test-only feature is the same split: make the feature always on, or gate it at runtime.
 - Toggling `CARGO_INCREMENTAL`, `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`, or env that build scripts watch (`rerun-if-env-changed`). Put needed flags in `.cargo/config.toml`, never per command.
 - Profile edits and toolchain bumps (pin with `rust-toolchain.toml`) — legitimate, sweep afterwards.
 - rust-analyzer checking with other settings: set its `cargo.targetDir` to `true` (own dir).
@@ -63,7 +65,7 @@ Also fix any build script whose `rerun-if-changed` names a missing path: it is a
 
 ## 5. Worktrees: own target dir, seeded
 
-Each checkout keeps its own `target/` inside it (deleted along with the worktree). Never point checkouts of one repo at a shared `CARGO_TARGET_DIR`/`build.target-dir`: cargo hashes path crates relative to the workspace root, so peers overwrite each other's artifacts, freshness falls back to mtimes, and a checkout can silently link another's code. (Don't hide `build-dir` under `~/.cargo` either; the bytes outlive the worktree.) sccache doesn't help: its keys include the path.
+Each checkout keeps its own `target/` inside it (deleted along with the worktree). Never point checkouts of one repo at a shared `CARGO_TARGET_DIR`/`build.target-dir`: cargo hashes path crates relative to the workspace root, so peers overwrite each other's artifacts, freshness falls back to mtimes, and a checkout can silently link another's code. A per-worktree dir elsewhere (`CARGO_TARGET_DIR`, `build-dir` under `~/.cargo`) is safe but outlives the worktree. sccache only hits for registry crates, which seeding already shares for free.
 
 `scripts/seed-target.py` gives a new worktree a copy of the main checkout's build dir, minus the path crates: `deps/` hardlinked (rustc replaces artifacts, never edits them), `.fingerprint/`, `build/` copied with absolute paths rewritten (mtimes preserved, or every build-script crate goes stale). Measured on a 4.6 GiB V8/wgpu workspace: seed 3 s, first build 35 s vs 8m43 cold. It needs the worktree on the main checkout's filesystem. Run it from a tracked post-checkout hook (fires on `git worktree add`, run in the new worktree; the script no-ops elsewhere):
 
