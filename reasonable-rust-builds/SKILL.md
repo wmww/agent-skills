@@ -34,7 +34,22 @@ opt-level = 2                  # deps compiled once, tests run fast
 debug = false                  # dependency frames lose file:line; nothing else
 ```
 
-Full debuginfo is most of every binary (one project: 630 MB → 245 MB per binary). Don't add `split-debuginfo = "unpacked"` to a long-lived target: it halves the binaries once (0.8 vs 1.8 GB for 32 test binaries) but leaves a new `.dwo` set in `deps/` on every rebuild that nothing deletes, 3-5 GB per target after a few days of edits. Never `strip` test binaries: that drops the line tables. No separate `profile.test`/`bench` settings.
+```toml
+# .cargo/config.toml: compress what is left, at link time (Linux; lld and GNU ld both take it)
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib"]
+```
+
+Full debuginfo is most of every binary (one project: 630 MB → 245 MB per binary). Even with line tables only, debug sections were still 80% of the test binaries in a 21-crate workspace (1.7 GB of 2.1 GB; the string table and the compile-unit scaffolding around the line tables, mostly the project's own crates). Measured on that workspace, 38 test binaries:
+
+| | binaries | backtrace frames |
+|---|---|---|
+| line tables, uncompressed | 1.7 GB | file and line |
+| line tables, zlib-compressed sections | 0.65 GB | file and line |
+| line tables, zstd-compressed sections | 0.57 GB | function names only: the symbolizer does not read zstd |
+| `debug = false` + `strip = "debuginfo"` | 0.34 GB | function names only; panic messages keep their own location |
+
+Take zlib: 40% of the size, nothing lost, compile CPU unchanged. Strip only if the last 0.3 GB matters more than locations on backtrace frames. Don't add `split-debuginfo = "unpacked"` to a long-lived target: it halves the binaries once but leaves a new `.dwo` set in `deps/` on every rebuild that nothing deletes, 3-5 GB per target after a few days of edits. No separate `profile.test`/`bench` settings.
 
 ## 2. Fewer linked binaries
 
