@@ -1,0 +1,11 @@
+#!/bin/sh
+# SessionStart hook: Claude sources $CLAUDE_ENV_FILE in the shell it starts for
+# each Bash command, before the command. Use that to put claudewait on PATH and
+# to record the command's task ID, PID and start time for claudewait: that
+# shell's stdout is tasks/<ID>.output until the command itself redirects it.
+{
+	printf 'export PATH=%s:"$PATH"\n' "'$CLAUDE_PLUGIN_ROOT/bin'"
+	cat <<'EOF'
+(f=$(readlink /proc/$$/fd/1) && case $f in */tasks/*.output) d=/tmp/claudewait-$(id -u)/$CLAUDE_CODE_SESSION_ID && mkdir -p "$d" && b=${f##*/} && echo "$$ $(cut -d' ' -f22 /proc/$$/stat) $f" >| "$d/${b%.output}";; esac) 2>/dev/null
+EOF
+} >> "$CLAUDE_ENV_FILE"

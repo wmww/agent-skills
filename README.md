@@ -1,6 +1,8 @@
 # Tess's agent skills
 Grab bag of my personal skills for coding agents
 
+- [`claudewait`](claudewait/) — wait for Claude Code background tasks by ID instead of
+  writing polling loops that hang (Claude Code only: it relies on a session hook)
 - [`gui-testing`](gui-testing/) — run a GUI program in a throwaway headless Wayland
   session and drive it with screenshots, clicks, typing and drags
 - [`reasonable-rust-builds`](reasonable-rust-builds/) — keep cargo target dirs from eating

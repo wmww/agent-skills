@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "claudewait",
+  "description": "Wait for background Bash tasks to finish with `claudewait ID...`, instead of writing until/sleep polling loops.",
+  "version": "0.1.0",
+  "author": {
+    "name": "wmww"
+  },
+  "homepage": "https://github.com/wmww/agent-skills/tree/main/claudewait"
+}

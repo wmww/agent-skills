@@ -7,6 +7,13 @@
   },
   "plugins": [
     {
+      "name": "claudewait",
+      "description": "Wait for background Bash tasks to finish with `claudewait ID...`, instead of writing until/sleep polling loops.",
+      "source": "./claudewait",
+      "category": "productivity",
+      "homepage": "https://github.com/wmww/agent-skills/tree/main/claudewait"
+    },
+    {
       "name": "gui-testing",
       "description": "Run a Linux GUI program in a disposable headless Wayland session, take screenshots and inject mouse/keyboard events. Use to test rendering/interaction/etc of a Wayland/X11 app.",
       "source": "./gui-testing",

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# claudewait: block until Claude Code background tasks exit.
+set -u
+
+usage() {
+	cat <<'EOF'
+usage: claudewait [--any] [--timeout S] ID...
+
+Wait for background tasks to finish. ID is the task ID Bash prints for
+run_in_background (or when a command is moved to the background). Run
+claudewait in the foreground; with a --timeout over 110, raise the Bash
+timeout to match.
+
+  --any        return when the first task finishes (default: wait for all)
+  --timeout S  give up after S seconds (default 110)
+
+Prints one line per task as it finishes: its exit code, how long it ran,
+and its output file. Tasks that finished before the call are reported
+right away. On timeout, lists the tasks still running and exits 124; run
+claudewait again to keep waiting.
+EOF
+}
+
+any=0 timeout=110 ids=()
+while (($#)); do
+	case $1 in
+		-h|--help) usage; exit 0 ;;
+		--any) any=1 ;;
+		--timeout) [[ ${2-} =~ ^[0-9]+$ ]] || { echo "claudewait: --timeout needs seconds" >&2; exit 2; }; timeout=$2; shift ;;
+		-*) echo "claudewait: unknown option $1 (see --help)" >&2; exit 2 ;;
+		*) ids+=("$1") ;;
+	esac
+	shift
+done
+((${#ids[@]})) || { usage >&2; exit 2; }
+[[ -n ${CLAUDE_CODE_SESSION_ID-} ]] || { echo "claudewait: \$CLAUDE_CODE_SESSION_ID not set; run this from Claude Code's Bash tool" >&2; exit 2; }
+
+# The plugin's SessionStart hook makes every Bash command write "PID STARTTIME
+# OUTPUT" here, named by its task ID, before the command itself runs.
+state=/tmp/claudewait-$(id -u)/$CLAUDE_CODE_SESSION_ID
+declare -A pid tick out
+for id in "${ids[@]}"; do
+	read -r pid[$id] tick[$id] out[$id] 2>/dev/null < "$state/$id" ||
+		{ echo "claudewait: unknown task ID $id (was it started before the claudewait plugin was enabled?)" >&2; exit 2; }
+done
+
+# Field 22 of /proc/PID/stat is the start time; matching it as well as the
+# PID means a reused PID never counts as the task still running.
+alive() { [[ $(cut -d' ' -f22 "/proc/${pid[$1]}/stat" 2>/dev/null) == "${tick[$1]}" ]]; }
+
+# Once the task's shell exits, Claude appends a status line such as
+# "[exited with code N]" or "[killed]" to the output file; give it a moment.
+status() {
+	local i last
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		last=$(tail -n 1 "${out[$1]}")
+		if [[ $last =~ ^\[exited\ with\ code\ (-?[0-9]+)\]$ ]]; then echo "exit ${BASH_REMATCH[1]}"; return
+		elif [[ $last =~ ^\[(.+)\]$ ]]; then echo "${BASH_REMATCH[1]}"; return
+		fi
+		sleep 0.2
+	done
+	echo "exit code unknown"
+}
+
+# The output file is created when the task starts.
+born() { stat -c %W "${out[$1]}"; }
+
+pending=() finished=0
+for id in "${ids[@]}"; do
+	if alive "$id"; then
+		pending+=("$id")
+	else
+		echo "$id  $(status "$id")  after $(($(stat -c %Y "${out[$id]}") - $(born "$id")))s, finished earlier  (output: ${out[$id]})"
+		finished=$((finished + 1))
+	fi
+done
+
+t0=$EPOCHSECONDS
+while ((${#pending[@]})) && ! ((any && finished)); do
+	if ((EPOCHSECONDS - t0 >= timeout)); then
+		for id in "${pending[@]}"; do
+			echo "$id  still running after $((EPOCHSECONDS - $(born "$id")))s"
+		done
+		exit 124
+	fi
+	sleep 1
+	left=()
+	for id in "${pending[@]}"; do
+		if alive "$id"; then
+			left+=("$id")
+		else
+			end=$EPOCHSECONDS
+			echo "$id  $(status "$id")  after $((end - $(born "$id")))s  (output: ${out[$id]})"
+			finished=$((finished + 1))
+		fi
+	done
+	pending=("${left[@]}")
+done
+for id in "${pending[@]}"; do
+	echo "$id  still running after $((EPOCHSECONDS - $(born "$id")))s"
+done
+exit 0
