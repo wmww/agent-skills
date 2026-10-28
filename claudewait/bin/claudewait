@@ -33,14 +33,14 @@ while (($#)); do
 	shift
 done
 ((${#ids[@]})) || { usage >&2; exit 2; }
-[[ -n ${CLAUDE_CODE_SESSION_ID-} ]] || { echo "claudewait: \$CLAUDE_CODE_SESSION_ID not set; run this from Claude Code's Bash tool" >&2; exit 2; }
+[[ -n ${CLAUDEWAIT_DIR-} ]] || { echo "claudewait: \$CLAUDEWAIT_DIR not set; run this from Claude Code's Bash tool with the claudewait plugin enabled" >&2; exit 2; }
 
 # The plugin's SessionStart hook makes every Bash command write "PID STARTTIME
-# OUTPUT" here, named by its task ID, before the command itself runs.
-state=/tmp/claudewait-$(id -u)/$CLAUDE_CODE_SESSION_ID
+# OUTPUT" to $CLAUDEWAIT_DIR, named by its task ID, before the command itself
+# runs.
 declare -A pid tick out
 for id in "${ids[@]}"; do
-	read -r pid[$id] tick[$id] out[$id] 2>/dev/null < "$state/$id" ||
+	read -r pid[$id] tick[$id] out[$id] 2>/dev/null < "$CLAUDEWAIT_DIR/$id" ||
 		{ echo "claudewait: unknown task ID $id (was it started before the claudewait plugin was enabled?)" >&2; exit 2; }
 done
 

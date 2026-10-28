@@ -3,9 +3,15 @@
 # each Bash command, before the command. Use that to put claudewait on PATH and
 # to record the command's task ID, PID and start time for claudewait: that
 # shell's stdout is tasks/<ID>.output until the command itself redirects it.
+# The records go in claudewait/ beside tasks/, so they share its lifespan.
 {
 	printf 'export PATH=%s:"$PATH"\n' "'$CLAUDE_PLUGIN_ROOT/bin'"
 	cat <<'EOF'
-(f=$(readlink /proc/$$/fd/1) && case $f in */tasks/*.output) d=/tmp/claudewait-$(id -u)/$CLAUDE_CODE_SESSION_ID && mkdir -p "$d" && b=${f##*/} && echo "$$ $(cut -d' ' -f22 /proc/$$/stat) $f" >| "$d/${b%.output}";; esac) 2>/dev/null
+f=$(readlink /proc/$$/fd/1 2>/dev/null)
+case $f in */tasks/*.output)
+	export CLAUDEWAIT_DIR="${f%/tasks/*}/claudewait"
+	(mkdir -p "$CLAUDEWAIT_DIR" && b=${f##*/} && echo "$$ $(cut -d' ' -f22 /proc/$$/stat) $f" >| "$CLAUDEWAIT_DIR/${b%.output}") 2>/dev/null;;
+esac
+unset f
 EOF
 } >> "$CLAUDE_ENV_FILE"
