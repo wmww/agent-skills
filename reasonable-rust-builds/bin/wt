@@ -17,7 +17,8 @@ runs the project's scripts/wt-setup if present (gitignored generated files a bui
 Pruning keeps what is in use, per target dir (<wt>/target and <wt>/*/target, each marked from its
 parent's workspace). Cargo reads every live unit's fingerprint on each build, even a no-op one.
 If anything in a target was read since the previous release, release runs `cargo test --workspace
---no-run` there (marks the standard set), then, in each profile dir used since then, deletes every
+--no-run` there, or the project's scripts/wt-mark in that dir if present (marks the standard set:
+list every standard command, each a no-op on a finished tree), then, in each profile dir used since then, deletes every
 unit (.fingerprint/<name>-<hash>, deps/*-<hash>*, build/<name>-<hash>) not read or written since.
 incremental/: all sessions but the newest in each dir (rustc keeps the previous one), and per crate
 the oldest dirs beyond the number of live units naming that crate (dead dirs from hash changes).
@@ -160,7 +161,7 @@ def prune_incremental(prof):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def prune_target(tgt):
+def prune_target(tgt, wt_root):
     stamp_file = tgt / ".wt-pruned"
     profiles = [fp.parent for fp in [*tgt.glob("*/.fingerprint"), *tgt.glob("*/*/.fingerprint")]]
     if stamp_file.exists():
@@ -169,9 +170,10 @@ def prune_target(tgt):
         if not used:
             return  # idle since the last release: nothing to learn, nothing to delete
         if (tgt.parent / "Cargo.toml").exists():
-            print(f"wt: marking build in {tgt.parent} (`cargo test --workspace --no-run`)", file=sys.stderr)
-            r = subprocess.run(["cargo", "test", "--workspace", "--no-run", "--quiet"], cwd=tgt.parent,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            hook = wt_root / "scripts/wt-mark"
+            cmd = ["sh", str(hook)] if hook.exists() else ["cargo", "test", "--workspace", "--no-run", "--quiet"]
+            print(f"wt: marking build in {tgt.parent} ({'scripts/wt-mark' if hook.exists() else '`cargo test --workspace --no-run`'})", file=sys.stderr)
+            r = subprocess.run(cmd, cwd=tgt.parent, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if r.returncode:
                 print(f"wt: marking build failed: {tgt} not pruned", file=sys.stderr)
                 return
@@ -206,7 +208,7 @@ def prune(path):
         print("wt: this filesystem doesn't record access times (noatime): targets not pruned", file=sys.stderr)
         return
     for t in targets:
-        prune_target(t)
+        prune_target(t, path)
 
 
 def release(arg=None):
