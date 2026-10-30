@@ -5,16 +5,20 @@ changed. Policy: two stay warm per device; more are created when more agents run
 trimmed again after.
 
   scripts/wt claim <branch> [<base>]   lowest free worktree (a new one if none), <branch> checked out
-                                     (made from <base>, default main, if new); prints its path
+                                       (made from <base>, default main, if new); prints its path
   scripts/wt release [<path>]          free it (default: the one containing cwd); must be clean
   scripts/wt trim [<keep>]             remove free worktrees beyond the <keep> (default 2) lowest-numbered
   scripts/wt list
 
 A claim is a marker in the common git dir, created atomically; release detaches HEAD (files
-untouched, the branch is free to merge or delete) and removes the marker.
+untouched, the branch is free to merge or delete) and removes the marker. Claim deletes a target
+grown past MAX_GB (orphaned artifact sets after dependency, toolchain or profile changes), so
+disk stays bounded without a sweeper; the next build is cold.
 """
 import os, shutil, subprocess, sys, time
 from pathlib import Path
+
+MAX_GB = 20  # about twice a settled target (notes); set per project
 
 
 def git(*args, cwd=None):
@@ -62,6 +66,13 @@ def claim(branch, base="main"):
         exists = subprocess.run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
                                 cwd=path, capture_output=True).returncode == 0
         git("checkout", "-q", *([branch] if exists else ["-b", branch, base]), cwd=path)
+        # Per-worktree setup of gitignored generated files (patched vendor crates etc.) goes here.
+        tgt = path / "target"
+        if tgt.is_dir():
+            gb = int(subprocess.run(["du", "-sk", str(tgt)], capture_output=True, text=True).stdout.split()[0]) / 2**20
+            if gb > MAX_GB:
+                shutil.rmtree(tgt, ignore_errors=True)
+                print(f"wt: deleted {tgt} ({gb:.0f} GB > {MAX_GB}): the first build is a cold one", file=sys.stderr)
     except SystemExit:
         (claims / f"wt{n}").unlink()
         raise

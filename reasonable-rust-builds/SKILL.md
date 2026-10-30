@@ -1,27 +1,26 @@
 ---
 name: reasonable-rust-builds
-description: Keep Rust/cargo builds fast and target dirs from eating tens of GBs (per worktree, per test binary, stale artifact pileup). Use when starting a Rust project, reorganizing a Rust repo's build/test/worktree workflow, or when builds are slow or target/ disk use is a problem.
+description: Keep Rust/cargo builds fast and target dirs bounded (per worktree, per test binary, stale artifact pileup), including for agents working in parallel worktrees. Use when starting a Rust project, reorganizing a Rust repo's build/test/worktree workflow, or when builds are slow or target/ disk use is a problem.
 ---
 
 # Reasonable Rust builds
 
-Disk is **linked binaries × debuginfo × artifact sets × checkouts**, and cargo never deletes anything. Time is mostly **recompiling what didn't change**: a second artifact set, incremental off, a cold target, a sweep that threw the caches away. Set each factor once, write down what a build costs, and treat a 3x deviation as a bug.
+Disk is **linked binaries × debuginfo × artifact sets × checkouts**, and cargo never deletes anything from `target/`. Time is mostly **recompiling what didn't change**: a second artifact set, incremental off, a cold target. Set each factor once, write down what a build costs, and treat a 3x deviation as a bug.
 
-Everything recurring lives in the repo, not in this skill: copy `scripts/wt` next to this file into the project's `scripts/` or `tools/`, put config in `Cargo.toml`, and put the rules in the project's agent instructions (snippet at the end). Keep it short.
+Everything recurring lives in the repo, not in this skill: copy `scripts/wt` next to this file into the project, put config in `Cargo.toml` / `.cargo/config.toml`, and put the rules in the project's agent instructions (snippet at the end).
 
 ## Know your numbers
 
-Measure on a quiet machine and record the results in the project's notes, because agents otherwise come to believe that minutes are normal. One 21-crate workspace on a 16-thread laptop: no-op build 0.4 s; edit a mid-stack crate then `cargo test --workspace` 8 s build + 31 s tests; edit the bottom crate 10-16 s; clean build 82 s, plus 53 s for test binaries, plus 17 s for a first clippy; a 30-seed simulator sweep 2.2 min. Load multiplies every step 2-5x, so compare CPU seconds, not wall: `/usr/bin/time -f "%e s %U user" cargo ...`, and count `Compiling` lines. The same project had been living with 4-7 minute builds and 40-minute test runs for a day before anyone measured; every one of them had a cause below.
+Measure once on a quiet machine and record in the project's notes: no-op build, one-line edit + `cargo test --workspace`, clean build, `scripts/wt claim` time, settled `target/` size. Without written numbers agents come to believe minutes are normal. Under load compare CPU seconds, not wall: `/usr/bin/time -f "%e s %U user" cargo ...`.
 
 ```sh
 cargo build --workspace 2>&1 | grep -c Compiling          # after an edit: only the crate and its dependents
 du -sh target/*/ target/debug/{deps,incremental,build}    # where the GB are
-ls target/debug/deps | grep -v '\.' | wc -l                # linked executables (Unix)
 cargo build --timings                                      # target/cargo-timings/*.html: the critical path
 cargo build -v 2>&1 | grep -i dirty                        # why a crate rebuilt
 ```
 
-Signs of trouble: a build on a tree built minutes ago compiles crates you didn't touch; `target/` grows by GB per day; `--release`, `-p`, `--jobs` or `--features` creeping into commands; a timing test running in the dev profile.
+Signs of trouble: a build on a tree built minutes ago compiles crates you didn't touch; `target/` grows by GB per day; `--release`, `-p`, `--features` or env vars creeping into commands.
 
 ## 1. Debuginfo
 
@@ -35,71 +34,67 @@ debug = false                  # dependency frames lose file:line; nothing else
 ```
 
 ```toml
-# .cargo/config.toml: compress what is left, at link time (Linux; lld and GNU ld both take it)
+# .cargo/config.toml: compress what is left, at link time (Linux)
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib"]
 ```
 
-Full debuginfo is most of every binary (one project: 630 MB → 245 MB per binary). Even with line tables only, debug sections were still 80% of the test binaries in a 21-crate workspace (1.7 GB of 2.1 GB; the string table and the compile-unit scaffolding around the line tables, mostly the project's own crates). Measured on that workspace, 38 test binaries:
-
-| | binaries | backtrace frames |
-|---|---|---|
-| line tables, uncompressed | 1.7 GB | file and line |
-| line tables, zlib-compressed sections | 0.65 GB | file and line |
-| line tables, zstd-compressed sections | 0.57 GB | function names only: the symbolizer does not read zstd |
-| `debug = false` + `strip = "debuginfo"` | 0.34 GB | function names only; panic messages keep their own location |
-
-Take zlib: 40% of the size, nothing lost, compile CPU unchanged. Strip only if the last 0.3 GB matters more than locations on backtrace frames. Don't add `split-debuginfo = "unpacked"` to a long-lived target: it halves the binaries once but leaves a new `.dwo` set in `deps/` on every rebuild that nothing deletes, 3-5 GB per target after a few days of edits. No separate `profile.test`/`bench` settings.
+Full debuginfo is most of every binary (630 MB → 245 MB with line tables). zlib compression takes the rest to about 40%, keeps file:line, costs no measurable CPU. Not zstd (the backtrace symbolizer can't read it, frames lose locations). Not `split-debuginfo = "unpacked"`: it leaves a new `.dwo` set per rebuild that nothing deletes, GBs per target within days.
 
 ## 2. Fewer linked binaries
 
 Every executable embeds the whole static dependency tree, so count binaries, not crates.
 
-- Each `tests/*.rs` file is a binary. Use one integration-test binary per crate: `tests/it/main.rs` with `mod foo; mod bar;` over `tests/it/*.rs`; filter with `cargo test --test it foo::`. Tests that relied on process isolation share state through a `OnceLock`.
-- Prefer unit tests (`#[cfg(test)] mod tests` in `src/`): they land in the lib's one test binary.
-- `test = false` on bins and libs with no unit tests, `doctest = false` on libs with no doctests, and a policy script that fails when such a target gains one (otherwise they are skipped silently). Edition 2024 merges doctests into one binary; older editions link one per doctest.
-- `cargo test` builds every example: keep them few or make them tests.
-- One workspace, one `Cargo.lock`, one `target/`, never sibling standalone crates.
-
-Linking itself is cheap with rustc's bundled lld (≥ 1.90 on x86_64 Linux): a mid-stack edit relinking ten test binaries fits inside an 8 s build step.
-
-Optional, for a heavy stack where many binaries each embed ≳100 MB: the bevy_dylib pattern, a `crate-type = ["dylib"]` crate re-exporting the heavy crates that dev binaries depend on (`use foo_dylib as _;`), excluded from the workspace, shipped with `--no-default-features`. Its unhashed output path means every feature set it is built with fights over one file: enable on its deps exactly what workspace resolution enables.
+- Each `tests/*.rs` file is a binary. One integration-test binary per crate: `tests/it/main.rs` with `mod foo;` over `tests/it/*.rs`; filter with `cargo test --test it foo::`.
+- Prefer unit tests (`#[cfg(test)] mod tests` in `src/`): they share the lib's one test binary.
+- `test = false` / `doctest = false` on targets with none. Keep examples few: `cargo test` builds them all.
+- One workspace, one `Cargo.lock`, one `target/` per checkout.
 
 ## 3. One artifact set
 
-Every distinct combination of features, flags and env compiles a new copy of the affected crates and everything above them, kept forever. Causes: `-p` subsets (features unify over the selected packages only: always `--workspace`, narrow with `--test`/name filters); a different feature set per command (pick one for build, test and clippy alike; one extra set for an opt-in area such as networking is the most you want); dev-dependencies enabling features a normal dependency doesn't (enable them in `[dependencies]` too); per-command `CARGO_INCREMENTAL`, `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`; profile edits and toolchain bumps (legitimate; see §6); rust-analyzer with other settings (give it `cargo.targetDir = true`).
+Every distinct combination of features, flags and env compiles a new copy of the affected crates and everything above them, kept forever. Causes:
 
-Check: run the project's canonical commands twice in any order; the repeats compile nothing (clippy's `-- -D warnings` is part of its fingerprint, so count `Checking` too). Fix any build script whose `rerun-if-changed` names a missing path (always dirty) or that watches more than it reads (one hashed every workspace crate's `src`, so a leaf edit rebuilt a core crate and everything above it).
+- `-p` subsets: features unify over the selected packages only. Always `--workspace`; narrow with `--test`/name filters.
+- A different `--features` per command. Pick one set for build, test and clippy alike.
+- Dev-dependencies enabling features a normal dependency doesn't: enable them in `[dependencies]` too.
+- Per-command `CARGO_INCREMENTAL`, `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`. Settings go in config files, once.
+- rust-analyzer with other settings: give it `cargo.targetDir = true` (its own subdir).
+
+Check: run the canonical commands twice in any order; the repeats compile nothing. Fix any build script whose `rerun-if-changed` names a missing path (always dirty) or watches more than it reads.
 
 ## 4. Speed
 
-- **Incremental stays on** for dev (the default). Off, a one-line edit cost 57 s instead of 11 s. It is a few GB per checkout and does not grow with edits (±0.1 GB per cycle).
-- **One profile for all development.** Release is a second copy of everything, and its thin-LTO relink of every test binary after a one-line edit takes minutes where dev takes seconds. If tests are compute-heavy, `[profile.dev] opt-level = 1` for workspace crates: one project's test run went 168 s → 32 s and its simulator sweep ran within 1.3x of release, for edits about 8 s slower. Release is for timing checks only, run on purpose, in the task's worktree; keep its `target/release` (a few hundred MB) so the next check is incremental. Timing-budget tests never run in dev: they take minutes there and prove nothing.
-- `cargo build --timings` shows the crate everything waits on; that is the place to split.
+- **Incremental stays on** (the dev default). Off, a one-line edit cost 57 s instead of 11 s.
+- **One profile for all development**: dev. Release is a second copy of everything and its LTO relink takes minutes per edit. If tests are compute-heavy, `[profile.dev] opt-level = 1` for workspace crates (one project: tests 168 s → 32 s, edits ~8 s slower). Release only for timing checks, by hand.
+- rustc's bundled lld (x86_64 Linux, rustc ≥ 1.90) makes linking cheap; mold buys nothing more. sccache misses path crates in another directory, so it doesn't help worktrees.
 
-## 5. Worktrees: a few warm ones, inside the repo
+## 5. Worktrees: a few warm ones, reused
 
-A fresh worktree's `target/` is cold (a full build, 2-4 minutes), and seeding it from another checkout is fragile. Keep a few long-lived worktrees at `.worktrees/wt<N>` inside the repo (gitignored; tools that scan sources must use explicit roots), each with its own ordinary in-tree `target/`, and move tasks through them: `scripts/wt claim <branch>` picks a free one (or makes a new one when all are busy) and checks the branch out there, `scripts/wt release` detaches HEAD when the branch is committed, `scripts/wt trim` removes free ones beyond the two that stay warm. git rewrites only the files that differ between branches and the path never changes, so a task's first build costs exactly a branch switch, incrementally. Agents work, test and gate there; the main checkout is never built: run the checks in the worktree after `git rebase main`, then `git merge --ff-only` on main. Disk is one target per warm worktree, about 6 GB each, flat.
+A fresh worktree's `target/` is a cold build (minutes). So keep a few long-lived worktrees at `.worktrees/wt<N>` inside the repo (gitignored), each with its own ordinary `target/`, and move tasks through them with `scripts/wt`:
+
+- `scripts/wt claim <branch>` takes the lowest free one (a new one if all are busy), checks the branch out there and prints the path: under a second, and the first build recompiles only what differs from that worktree's last build, since git rewrites only changed files and the path never changes.
+- `scripts/wt release` (detach HEAD, free it) as the agent's very last step, after its last commit. Released early, the next claim takes it while the first agent is still writing.
+- `scripts/wt trim` removes free worktrees beyond two.
+- Agents build, test and run checks in their worktree. The **main checkout is never built**; it only fast-forwards: `git rebase main` in the worktree, run the checks there, then `git merge --ff-only <branch>` in main.
+- A coordinator claims a worktree per sub-agent and puts the path in its brief. Don't use the agent harness's own worktree isolation (Claude Code's `isolation: "worktree"`, `EnterWorktree`): each makes a fresh checkout with a cold target.
+- Gitignored generated files a build needs (patched vendor crates, codegen) are set up in `claim`.
+
+**Bounded disk**: a worktree's target settles at about 1.5x a fresh build (rustc keeps each crate's previous incremental session) and stays flat while dependencies, toolchain and profile stay put. Changing one of those orphans the old artifacts, which cargo never deletes; `claim` therefore deletes a target over `MAX_GB` (set it to about twice the settled size) and the next build is cold. Don't run an artifact sweeper: one that ran after every merge deleted live incremental state, and every build compiled from scratch at 16x the CPU for a day before anyone noticed. Deleting a target is always safe.
 
 Rejected, measured:
-- **Seeding** a new worktree's target from another's (hardlinks, copied fingerprints): fast when fresh, but a changed crate compiles in full, the hook skipped silently when the source was mid-build, and a stale source rebuilt everything.
-- **One build checkout behind a lock**, sources synced in by content with fresh mtimes on changed files: as fast as a warm worktree and one target on the box, but the lock must cover test runs (tests find fixtures through the compile-time manifest dir), so every job serializes. Worth it only when disk, not parallelism, is the constraint.
-- **A shared `CARGO_TARGET_DIR`** across checkouts: cargo keys path crates without the path and judges freshness by mtime; a checkout whose edit is older than another's build reads as fresh with the other's code inside (verified with `nm`), and incremental is discarded on every alternation.
-- **sccache**: misses path crates in another directory (0 hits).
+- **One `CARGO_TARGET_DIR` shared by checkouts**: cargo keys path crates without the path and judges freshness by mtime, so a checkout can link another checkout's code and pass as fresh.
+- **Seeding** a new worktree's target from another (hardlinks, copied fingerprints, rewritten build-script paths): fragile, and silently cold when the source was stale or mid-build.
+- **One build checkout behind a lock**: correct, but the lock must cover test runs, so all agents serialize.
 
-## 6. When target/ grows
+## 6. CI
 
-With §1 and §3 in place nothing accumulates, so there is nothing to sweep. After a toolchain, profile or dependency change the old artifacts are orphaned: delete `target/` in that worktree and take one cold build. Don't run an artifact sweeper automatically. One that ran after every merge had a counting bug (it treated a crate's build and clippy-check units as one, kept clippy's incremental dirs and deleted the build's), and every build after it compiled from scratch at 16x the CPU for a day before anyone noticed. If you must sweep, dry-run it and check that the next incremental build is still incremental.
-
-## 7. CI
-
-Build with the invocation you test with (`cargo test --workspace --no-run`, then `cargo test --workspace`) so the cache holds one artifact set. Cache only dependencies, keyed on `Cargo.lock` plus toolchain.
+Build with the invocation you test with (`cargo test --workspace --no-run`, then `cargo test --workspace`). Cache dependencies only, keyed on everything that changes their artifacts: `Cargo.lock`, `Cargo.toml` (profiles), `.cargo/config.toml`, toolchain.
 
 ## Project instructions snippet
 
 ```markdown
-- Work in a task worktree: `scripts/wt claim <branch>` prints it (`.worktrees/wtN`, warm `target/` kept between tasks); `scripts/wt release` when done. Never build in the main checkout, never share a target dir between checkouts.
-- Build and test only with `cargo test --workspace` (narrow with `--test it <module>::` and name filters) and `cargo clippy --workspace --all-targets -- -D warnings`, dev profile; `--release` only for timing checks, by hand, in your worktree. No `-p`, no other `--features`, no per-command `RUSTFLAGS`/`CARGO_INCREMENTAL`/`CARGO_TARGET_DIR`: each combination builds and keeps another copy of the tree.
-- New integration tests go in the crate's one test binary (`tests/it/`), not new `tests/*.rs` files.
-- Expected costs are in notes/build.md; if yours are 3x those at low load, stop and find out why.
+- Work in a task worktree: `scripts/wt claim <branch>` prints it (`.worktrees/wtN`, warm `target/` kept between tasks); `scripts/wt release` only as your very last step, after your last commit. Never build in the main checkout; main only fast-forwards (`git rebase main` and the checks in the worktree, then `git merge --ff-only <branch>` in main).
+- Coordinators: claim a worktree per sub-agent and give it the path; never use agent-tool worktree isolation (cold targets). `scripts/wt trim` when the parallel work winds down.
+- Build and test only with `cargo test --workspace` (narrow with `--test it <module>::` and name filters) and `cargo clippy --workspace --all-targets`. No `-p`, no other `--features`, no per-command `RUSTFLAGS`/`CARGO_INCREMENTAL`/`CARGO_TARGET_DIR`: each combination builds and keeps another copy of the tree. `--release` only for timing checks.
+- Expected costs are in notes/<build note>; if yours are 3x those at low load, stop and find out why.
 ```
