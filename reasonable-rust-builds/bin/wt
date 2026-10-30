@@ -14,12 +14,15 @@ A claim is a marker in the common git dir, created atomically; release detaches 
 untouched, the branch is free to merge or delete) and removes the marker. After checkout, claim
 runs the project's scripts/wt-setup if present (gitignored generated files a build needs).
 
-Pruning keeps what is in use. Cargo reads every live unit's fingerprint on each build, even a
-no-op one, so release runs `cargo build --workspace --all-targets` (marks the standard set) and then
-deletes every unit (.fingerprint/<name>-<hash>, deps/*-<hash>*, build/<name>-<hash>) not read or
-written since the previous release, plus every incremental/ dir not written since then (costs one
-non-incremental compile of that crate if it was live). Then it resets access times so the next
-read registers under relatime. Nothing is deleted on time alone, or without a stamp to compare to.
+Pruning keeps what is in use, per target dir (<wt>/target and <wt>/*/target, each marked from its
+parent's workspace). Cargo reads every live unit's fingerprint on each build, even a no-op one.
+If anything in a target was read since the previous release, release runs `cargo test --workspace
+--no-run` there (marks the standard set), then, in each profile dir used since then, deletes every
+unit (.fingerprint/<name>-<hash>, deps/*-<hash>*, build/<name>-<hash>) not read or written since.
+incremental/: all sessions but the newest in each dir (rustc keeps the previous one), and per crate
+the oldest dirs beyond the number of live units naming that crate (dead dirs from hash changes).
+Then it resets access times so relatime records the next read. Idle targets and profiles are
+left alone; nothing is deleted on time alone, or without a stamp to compare to.
 """
 import os, shutil, subprocess, sys, time
 from pathlib import Path
@@ -70,6 +73,8 @@ def claim(branch, base="main"):
         exists = subprocess.run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
                                 cwd=path, capture_output=True).returncode == 0
         git("checkout", "-q", *([branch] if exists else ["-b", branch, base]), cwd=path)
+        if git("branch", "--show-current", cwd=path) != branch:
+            sys.exit(f"wt: {path} is not on {branch} after checkout; another agent may be using it")
         if (path / "scripts/wt-setup").exists() and subprocess.run(
                 ["sh", "scripts/wt-setup"], cwd=path, stdout=subprocess.DEVNULL).returncode:
             sys.exit("wt: scripts/wt-setup failed")
@@ -88,7 +93,10 @@ def files(d):
 def used_since(d, stamp):
     """Any file under d read or written since stamp (atime alone misses fresh writes)."""
     for f in files(d):
-        st = os.lstat(f)
+        try:
+            st = os.lstat(f)
+        except OSError:
+            continue
         if max(st.st_atime, st.st_mtime) > stamp:
             return True
     return os.lstat(d).st_mtime > stamp
@@ -108,24 +116,67 @@ def du_gb(p):
     return int(subprocess.run(["du", "-sk", str(p)], capture_output=True, text=True).stdout.split()[0]) / 2**20
 
 
-def prune(path):
-    tgt = path / "target"
-    if not tgt.is_dir():
+# fingerprint <kind>-<target>.json kinds that compile (run-build-script doesn't); longest first
+KINDS = sorted(["lib", "bin", "test-lib", "test-bin", "test-integration-test", "bench-lib", "bench-bin",
+                "bench-integration-bench", "example", "test-example", "build-script"], key=len, reverse=True)
+
+
+def live_crates(prof):
+    """Crate name (incremental/ spelling) -> number of live units naming it."""
+    n = {}
+    for j in (prof / ".fingerprint").glob("*/*.json"):
+        stem = j.stem
+        for k in KINDS:
+            if stem.startswith(k + "-"):
+                c = stem[len(k) + 1:].replace("-", "_")
+                n[c] = n.get(c, 0) + 1
+                break
+    return n
+
+
+def mtime(p):
+    return os.lstat(p).st_mtime
+
+
+def prune_incremental(prof):
+    inc = prof / "incremental"
+    if not inc.is_dir():
         return
-    if not atime_works(tgt):
-        print("wt: this filesystem doesn't record access times (noatime): target not pruned", file=sys.stderr)
-        return
-    r = subprocess.run(["cargo", "build", "--workspace", "--all-targets", "--quiet"], cwd=path,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if r.returncode:
-        print("wt: `cargo build --workspace --all-targets` failed: target not pruned", file=sys.stderr)
-        return
+    by_crate = {}
+    for d in inc.iterdir():
+        if not d.is_dir():
+            continue
+        sessions = sorted((s for s in d.glob("s-*") if s.is_dir()), key=mtime)
+        for s in sessions[:-1]:
+            shutil.rmtree(s, ignore_errors=True)
+            (d / ("-".join(s.name.split("-")[:3]) + ".lock")).unlink(missing_ok=True)
+        by_crate.setdefault(d.name.rsplit("-", 1)[0], []).append(d)
+    live = live_crates(prof)
+    for crate, dirs in by_crate.items():
+        keep = live.get(crate, 0)
+        if keep == 0:
+            continue  # can't tell which unit it belongs to: keep
+        for d in sorted(dirs, key=mtime, reverse=True)[keep:]:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def prune_target(tgt):
     stamp_file = tgt / ".wt-pruned"
     profiles = [fp.parent for fp in [*tgt.glob("*/.fingerprint"), *tgt.glob("*/*/.fingerprint")]]
     if stamp_file.exists():
         stamp = stamp_file.stat().st_mtime
+        used = [prof for prof in profiles if used_since(prof / ".fingerprint", stamp)]
+        if not used:
+            return  # idle since the last release: nothing to learn, nothing to delete
+        if (tgt.parent / "Cargo.toml").exists():
+            print(f"wt: marking build in {tgt.parent} (`cargo test --workspace --no-run`)", file=sys.stderr)
+            r = subprocess.run(["cargo", "test", "--workspace", "--no-run", "--quiet"], cwd=tgt.parent,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r.returncode:
+                print(f"wt: marking build failed: {tgt} not pruned", file=sys.stderr)
+                return
         before, units = du_gb(tgt), 0
-        for prof in profiles:
+        for prof in used:
             for unit in list((prof / ".fingerprint").iterdir()):
                 if used_since(unit, stamp):
                     continue
@@ -135,18 +186,27 @@ def prune(path):
                     shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
                 shutil.rmtree(unit)
                 units += 1
-            inc = prof / "incremental"
-            for d in list(inc.iterdir()) if inc.is_dir() else []:
-                if d.is_dir() and not any(os.lstat(x).st_mtime > stamp for x in [d, *d.iterdir()]):
-                    shutil.rmtree(d)
-        if units:
-            print(f"wt: pruned {units} unused units, {before - du_gb(tgt):.1f} GB", file=sys.stderr)
+            prune_incremental(prof)
+        freed = before - du_gb(tgt)
+        if units or freed > 0.1:
+            print(f"wt: pruned {tgt}: {units} unused units, {freed:.1f} GB", file=sys.stderr)
     # atime <= mtime makes relatime record the next read; the stamp postdates every reset
     for prof in profiles:
         for f in files(prof / ".fingerprint"):
             st = os.lstat(f)
             os.utime(f, (st.st_mtime, st.st_mtime), follow_symlinks=False)
     stamp_file.touch()
+
+
+def prune(path):
+    targets = [t for t in [path / "target", *path.glob("*/target")] if (t / "CACHEDIR.TAG").exists()]
+    if not targets:
+        return
+    if not atime_works(targets[0]):
+        print("wt: this filesystem doesn't record access times (noatime): targets not pruned", file=sys.stderr)
+        return
+    for t in targets:
+        prune_target(t)
 
 
 def release(arg=None):
@@ -156,6 +216,7 @@ def release(arg=None):
     prune(path)
     git("checkout", "-q", "--detach", cwd=path)
     (claims / path.name).unlink(missing_ok=True)
+    print(f"released {path}")
 
 
 def trim(keep=2):

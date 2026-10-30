@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "reasonable-rust-builds",
   "description": "Keep Rust/cargo builds fast and target dirs from eating tens of GBs (debuginfo, test binaries, artifact sets, worktrees), with `wt` for warm task worktrees whose targets prune to what is in use. Use when starting a Rust project, reorganizing a Rust repo's build/test/worktree workflow, or when builds are slow or target/ disk use is a problem.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "wmww"
   },
