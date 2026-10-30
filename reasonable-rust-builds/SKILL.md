@@ -7,11 +7,11 @@ description: Keep Rust/cargo builds fast and target dirs bounded (per worktree, 
 
 Disk is **linked binaries × debuginfo × artifact sets × checkouts**, and cargo never deletes anything from `target/`. Time is mostly **recompiling what didn't change**: a second artifact set, incremental off, a cold target. Set each factor once, write down what a build costs, and treat a 3x deviation as a bug.
 
-Everything recurring lives in the repo, not in this skill: copy `scripts/wt` next to this file into the project, put config in `Cargo.toml` / `.cargo/config.toml`, and put the rules in the project's agent instructions (snippet at the end).
+This plugin ships `wt` (on PATH as `bin/wt` next to this file), the worktree tool below. Setting a project up: enable the plugin in the project's `.claude/settings.json` (`extraKnownMarketplaces` → `wmww-agent-skills`: github `wmww/agent-skills`; `enabledPlugins` → `"reasonable-rust-builds@wmww-agent-skills": true`), put config in `Cargo.toml` / `.cargo/config.toml`, and put the rules in the project's agent instructions (snippet at the end).
 
 ## Know your numbers
 
-Measure once on a quiet machine and record in the project's notes: no-op build, one-line edit + `cargo test --workspace`, clean build, `scripts/wt claim` time, settled `target/` size. Without written numbers agents come to believe minutes are normal. Under load compare CPU seconds, not wall: `/usr/bin/time -f "%e s %U user" cargo ...`.
+Measure once on a quiet machine and record in the project's notes: no-op build, one-line edit + `cargo test --workspace`, clean build, `wt claim` time, settled `target/` size. Without written numbers agents come to believe minutes are normal. Under load compare CPU seconds, not wall: `/usr/bin/time -f "%e s %U user" cargo ...`.
 
 ```sh
 cargo build --workspace 2>&1 | grep -c Compiling          # after an edit: only the crate and its dependents
@@ -60,7 +60,7 @@ Every distinct combination of features, flags and env compiles a new copy of the
 - Per-command `CARGO_INCREMENTAL`, `RUSTFLAGS`, `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`. Settings go in config files, once.
 - rust-analyzer with other settings: give it `cargo.targetDir = true` (its own subdir).
 
-Check: run the canonical commands twice in any order; the repeats compile nothing. Fix any build script whose `rerun-if-changed` names a missing path (always dirty) or watches more than it reads.
+Check: run the canonical commands twice in any order; the repeats compile nothing. Fix any build script whose `rerun-if-changed` names a missing path (always dirty) or watches more than it reads. Don't stamp the git commit into a crate low in the stack: rerunning on `.git/HEAD` or `refs/heads` (shared by all worktrees) rebuilds everything above it on every checkout, and on every commit in any worktree. Stamp in the leaf binary.
 
 ## 4. Speed
 
@@ -70,16 +70,17 @@ Check: run the canonical commands twice in any order; the repeats compile nothin
 
 ## 5. Worktrees: a few warm ones, reused
 
-A fresh worktree's `target/` is a cold build (minutes). So keep a few long-lived worktrees at `.worktrees/wt<N>` inside the repo (gitignored), each with its own ordinary `target/`, and move tasks through them with `scripts/wt`:
+A fresh worktree's `target/` is a cold build (minutes). So keep a few long-lived worktrees at `.worktrees/wt<N>` inside the repo (gitignored), each with its own ordinary `target/`, and move tasks through them with `wt`:
 
-- `scripts/wt claim <branch>` takes the lowest free one (a new one if all are busy), checks the branch out there and prints the path: under a second, and the first build recompiles only what differs from that worktree's last build, since git rewrites only changed files and the path never changes.
-- `scripts/wt release` (detach HEAD, free it) as the agent's very last step, after its last commit. Released early, the next claim takes it while the first agent is still writing.
-- `scripts/wt trim` removes free worktrees beyond two.
+- `wt claim <branch>` takes the lowest free one (a new one if all are busy), checks the branch out there and prints the path: under a second, and the first build recompiles only what differs from that worktree's last build, since git rewrites only changed files and the path never changes. It then runs the project's `scripts/wt-setup` if there is one (gitignored generated files a build needs: patched vendor crates, codegen).
+- `wt release` prunes the target (below) and frees the worktree. It's the agent's very last step, after its last commit: released early, the next claim takes it while the first agent is still writing.
+- `wt trim` removes free worktrees beyond two.
 - Agents build, test and run checks in their worktree. The **main checkout is never built**; it only fast-forwards: `git rebase main` in the worktree, run the checks there, then `git merge --ff-only <branch>` in main.
 - A coordinator claims a worktree per sub-agent and puts the path in its brief. Don't use the agent harness's own worktree isolation (Claude Code's `isolation: "worktree"`, `EnterWorktree`): each makes a fresh checkout with a cold target.
-- Gitignored generated files a build needs (patched vendor crates, codegen) are set up in `claim`.
 
-**Bounded disk**: a worktree's target settles at about 1.5x a fresh build (rustc keeps each crate's previous incremental session) and stays flat while dependencies, toolchain and profile stay put. Changing one of those orphans the old artifacts, which cargo never deletes; `claim` therefore deletes a target over `MAX_GB` (set it to about twice the settled size) and the next build is cold. Don't run an artifact sweeper: one that ran after every merge deleted live incremental state, and every build compiled from scratch at 16x the CPU for a day before anyone noticed. Deleting a target is always safe.
+**Bounded disk: keep what's in use.** Cargo never deletes a unit (a crate built with particular settings; its files all carry the unit's hash), so every dependency, toolchain or profile change leaves the old units behind. But on every build, even a no-op, cargo reads the fingerprint of each unit in the build graph, which updates its access time. `wt release` uses that: it runs `cargo build --workspace --all-targets` (a no-op on a just-tested tree, which marks the standard set), deletes every unit whose fingerprint wasn't read or written since the previous release (`.fingerprint/<name>-<hash>`, `deps/*-<hash>*`, `build/<name>-<hash>`), deletes every `incremental/` dir not written since then, and resets access times so the next read registers under `relatime`. So a target holds the standard set plus whatever the last task built. It's driven by builds, not the clock, so an idle worktree loses nothing. Mistakes only cost rebuilds: a pruned live unit compiles again; a pruned live incremental dir costs one non-incremental compile of that crate (seconds). Something used only occasionally (a release timing check) is rebuilt when next needed. On a `noatime` filesystem it skips pruning and says so.
+
+Don't prune by age (`cargo-sweep --time`: it can't tell live from dead in a young target) or per file (on a no-op build cargo reads fingerprints, not rlibs, so file atimes delete live rlibs), and don't define live as the outputs of a fixed list of commands (the marking build only adds to what the task used): one sweeper that did kept clippy's incremental dirs and deleted the build's, and every build compiled from scratch at 16x the CPU for a day. Deleting a whole target is always safe.
 
 Rejected, measured:
 - **One `CARGO_TARGET_DIR` shared by checkouts**: cargo keys path crates without the path and judges freshness by mtime, so a checkout can link another checkout's code and pass as fresh.
@@ -93,8 +94,9 @@ Build with the invocation you test with (`cargo test --workspace --no-run`, then
 ## Project instructions snippet
 
 ```markdown
-- Work in a task worktree: `scripts/wt claim <branch>` prints it (`.worktrees/wtN`, warm `target/` kept between tasks); `scripts/wt release` only as your very last step, after your last commit. Never build in the main checkout; main only fast-forwards (`git rebase main` and the checks in the worktree, then `git merge --ff-only <branch>` in main).
-- Coordinators: claim a worktree per sub-agent and give it the path; never use agent-tool worktree isolation (cold targets). `scripts/wt trim` when the parallel work winds down.
+- `wt` comes from the reasonable-rust-builds plugin (github wmww/agent-skills, enabled in `.claude/settings.json`). If it's not on PATH, stop and ask the user to install it; don't improvise worktrees.
+- Work in a task worktree: `wt claim <branch>` prints it (`.worktrees/wtN`, warm `target/` kept between tasks); `wt release` only as your very last step, after your last commit. Never build in the main checkout; main only fast-forwards (`git rebase main` and the checks in the worktree, then `git merge --ff-only <branch>` in main).
+- Coordinators: claim a worktree per sub-agent and give it the path; never use agent-tool worktree isolation (cold targets). `wt trim` when the parallel work winds down.
 - Build and test only with `cargo test --workspace` (narrow with `--test it <module>::` and name filters) and `cargo clippy --workspace --all-targets`. No `-p`, no other `--features`, no per-command `RUSTFLAGS`/`CARGO_INCREMENTAL`/`CARGO_TARGET_DIR`: each combination builds and keeps another copy of the tree. `--release` only for timing checks.
 - Expected costs are in notes/<build note>; if yours are 3x those at low load, stop and find out why.
 ```
