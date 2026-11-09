@@ -12,12 +12,12 @@ trimmed again after.
 
 A claim is a marker in the common git dir, created atomically; release detaches HEAD (files
 untouched, the branch is free to merge or delete) and removes the marker. After checkout, claim
-runs the project's scripts/wt-setup if present (gitignored generated files a build needs).
+runs the project's .claude/wt-setup if present (gitignored generated files a build needs).
 
 Pruning keeps what is in use, per target dir (target/ beside any tracked Cargo.toml, at any depth,
 each marked from its parent's workspace). Cargo reads every live unit's fingerprint on each build, even a no-op one.
 If anything in a target was read since the previous release, release runs `cargo test --workspace
---no-run` there, or the project's scripts/wt-mark in that dir if present (marks the standard set:
+--no-run` there, or the project's .claude/wt-mark in that dir if present (marks the standard set:
 list every standard command, each a no-op on a finished tree), then, in each profile dir used since then, deletes every
 unit (.fingerprint/<name>-<hash>, deps/*-<hash>*, build/<name>-<hash>) not read or written since.
 incremental/: all sessions but the newest in each dir (rustc keeps the previous one), and per crate
@@ -76,9 +76,9 @@ def claim(branch, base="main"):
         git("checkout", "-q", *([branch] if exists else ["-b", branch, base]), cwd=path)
         if git("branch", "--show-current", cwd=path) != branch:
             sys.exit(f"wt: {path} is not on {branch} after checkout; another agent may be using it")
-        if (path / "scripts/wt-setup").exists() and subprocess.run(
-                ["sh", "scripts/wt-setup"], cwd=path, stdout=subprocess.DEVNULL).returncode:
-            sys.exit("wt: scripts/wt-setup failed")
+        if (path / ".claude/wt-setup").exists() and subprocess.run(
+                ["sh", ".claude/wt-setup"], cwd=path, stdout=subprocess.DEVNULL).returncode:
+            sys.exit("wt: .claude/wt-setup failed")
     except SystemExit:
         (claims / f"wt{n}").unlink()
         raise
@@ -169,9 +169,9 @@ def prune_target(tgt, wt_root):
         used = [prof for prof in profiles if used_since(prof / ".fingerprint", stamp)]
         if not used:
             return  # idle since the last release: nothing to learn, nothing to delete
-        hook = wt_root / "scripts/wt-mark"
+        hook = wt_root / ".claude/wt-mark"
         cmd = ["sh", str(hook)] if hook.exists() else ["cargo", "test", "--workspace", "--no-run", "--quiet"]
-        print(f"wt: marking build in {tgt.parent} ({'scripts/wt-mark' if hook.exists() else '`cargo test --workspace --no-run`'})", file=sys.stderr)
+        print(f"wt: marking build in {tgt.parent} ({'.claude/wt-mark' if hook.exists() else '`cargo test --workspace --no-run`'})", file=sys.stderr)
         r = subprocess.run(cmd, cwd=tgt.parent, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if r.returncode:
             print(f"wt: marking build failed: {tgt} not pruned", file=sys.stderr)
