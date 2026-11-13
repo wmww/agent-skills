@@ -50,6 +50,23 @@ wdotool mousemove 120 249 keydown Shift_L click 1 keyup Shift_L
 
 Use real keysym names when pressing a modifier alone (`Shift_L`, `Control_L`), not the chord spellings that `key` accepts. Avoid `2>/dev/null` - it hides errors and failures. Touch isn't available: no Wayland protocol exposes virtual touch, and uinput events don't reach a headless compositor. Touch-only gesture handling stays untested.
 
+## Sizes and resizing
+
+Resize the output and the tiled window follows - a live resize the app sees as a configure:
+
+```sh
+swaymsg output HEADLESS-1 mode 800x600
+swaymsg -- output HEADLESS-1 mode --custom 333x777    # arbitrary sizes need the --
+swaymsg output HEADLESS-1 scale 1.5                   # HiDPI/fractional; screenshots stay in pixels
+for w in 1000 640 320; do swaymsg output HEADLESS-1 mode ${w}x600; sleep 0.3; grim $DIR/w$w.png; done
+```
+
+Screenshot pixels remain click coordinates at any scale. To let the app's own size limits apply, float the window instead (min 75x50, max the output; `resize set` keeps the window's centre, hence the move):
+
+```sh
+swaymsg '[app_id=foo] floating enable, resize set 500 300, move position 0 0'
+```
+
 ## Compositor control
 
 `swaymsg` is available once `$DIR/env` is sourced:
